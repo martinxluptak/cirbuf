@@ -17,39 +17,48 @@ typedef struct {
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-static void create_buffer_mirror(cirbuf_t *cb)
+static cirbuf_t *create_buffer_mirror(cirbuf_t *cb)
 {
     char path[] = "/tmp/cirbuf-XXXXXX";
     int fd = mkstemp(path);
-    unlink(path);
-    ftruncate(fd, cb->size);
-    /* FIXME: validate if mkstemp, unlink, ftruncate failed */
+    if (fd < 0)
+        abort();
+    if (unlink(path))
+        return NULL;
+    if (ftruncate(fd, cb->size))
+        return NULL;
 
     /* create the array of data */
     cb->data = mmap(NULL, cb->size << 1, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE,
                     -1, 0);
-    /* FIXME: validate if cb->data != MAP_FAILED */
+    if (cb->data == MAP_FAILED)
+        return NULL;
 
     void *address = mmap(cb->data, cb->size, PROT_READ | PROT_WRITE,
                          MAP_FIXED | MAP_SHARED, fd, 0);
-    /* FIXME: validate if address == cb->data */
+    if (address != cb->data)
+        return NULL;
 
     address = mmap(cb->data + cb->size, cb->size, PROT_READ | PROT_WRITE,
                    MAP_FIXED | MAP_SHARED, fd, 0);
-    /* FIXME: validate if address == cb->data + cb->size */
+    if (address != cb->data + cb->size)
+        return NULL;
+    if (close(fd) == -1)
+        return NULL;
 
-    close(fd);
+    return cb;
 }
 
 /** Create new circular buffer.
+ * @param dst Initializes circular buffer pointed to by this pointer.
  * @param size Size of the circular buffer.
- * @return pointer to new circular buffer
+ * @return true if initialization successful, false otherwise.
  */
-static inline void cirbuf_new(cirbuf_t *dst, const unsigned long int size)
+static inline bool cirbuf_new(cirbuf_t *dst, const unsigned long int size)
 {
     dst->size = size;
     dst->head = dst->tail = 0;
-    create_buffer_mirror(dst);
+    return create_buffer_mirror(dst);
 }
 
 /** Free memory used by circular buffer
@@ -80,12 +89,12 @@ static inline int cirbuf_offer(cirbuf_t *cb,
     if (cirbuf_unusedspace(cb) <= size)
         return 0;
 
-    int written = cirbuf_unusedspace(cb);
-    written = size < written ? size : written;
-    memcpy(cb->data + cb->tail, data, written);
-    cb->tail += written;
-    /* TODO: add your code here */
-    return written;
+    memcpy(cb->data + cb->tail, data, size);
+    cb->tail += size;
+
+    if (cb->size < cb->tail)
+        cb->tail -= cb->size;
+    return size;
 }
 
 /** Tell if the circular buffer is empty.
@@ -107,8 +116,7 @@ static inline unsigned char *cirbuf_peek(const cirbuf_t *cb)
     if (cirbuf_is_empty(cb))
         return NULL;
 
-    /* TODO: add your own code here */
-    return NULL;
+    return cb->data + cb->head;
 }
 
 /** Release data at the head from the circular buffer.
@@ -166,6 +174,36 @@ static inline int cirbuf_usedspace(const cirbuf_t *cb)
 static inline int cirbuf_unusedspace(const cirbuf_t *cb)
 {
     return cb->size - cirbuf_usedspace(cb);
+}
+
+static inline void cirbuf_pprint(const cirbuf_t *cb)
+{
+    printf("pretty print:\n");
+    printf("\"%s\"\n", (char *) cb->data);
+    printf(" ");
+    uint i;
+    if (cb->head < cb->tail) {
+        for (i = 1; i < cb->head; i++)
+            printf(" ");
+        printf("h");
+        for (i = cb->head + 1; i < cb->tail; i++)
+            printf(" ");
+        printf("t");
+    } else if (cb->head > cb->tail) {
+        for (i = 1; i < cb->tail; i++)
+            printf(" ");
+        printf("t");
+        for (i = cb->head + 1; i < cb->head; i++)
+            printf(" ");
+        printf("h");
+    } else {
+        /* head and tail are on the same spot - mark as x */
+        for (i = 1; i < cb->tail; i++)
+            printf(" ");
+        printf("x");
+    }
+    printf("\n size:%ld unused: %d peek: %s\n", cb->size,
+           cirbuf_unusedspace(cb), cirbuf_peek(cb));
 }
 
 #endif /* CIRBUF_H */
